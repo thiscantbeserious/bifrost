@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/fasthttp/router"
 	"github.com/google/uuid"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
@@ -29,6 +31,7 @@ import (
 // GovernanceManager is the interface for the governance manager
 type GovernanceManager interface {
 	GetGovernanceData() *governance.GovernanceData
+	ReloadComplexityAnalyzerConfig(ctx context.Context, config *configstore.ComplexityAnalyzerConfig) error
 	ReloadVirtualKey(ctx context.Context, id string) (*configstoreTables.TableVirtualKey, error)
 	RemoveVirtualKey(ctx context.Context, id string) error
 	ReloadTeam(ctx context.Context, id string) (*configstoreTables.TableTeam, error)
@@ -272,6 +275,9 @@ type UpdateProviderGovernanceRequest struct {
 
 // RegisterRoutes registers all governance-related routes for the new hierarchical system
 func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.BifrostHTTPMiddleware) {
+	r.GET("/api/governance/complexity-analyzer-config", lib.ChainMiddlewares(h.getComplexityAnalyzerConfig, middlewares...))
+	r.PUT("/api/governance/complexity-analyzer-config", lib.ChainMiddlewares(h.updateComplexityAnalyzerConfig, middlewares...))
+
 	// Virtual Key CRUD operations
 	r.GET("/api/governance/virtual-keys", lib.ChainMiddlewares(h.getVirtualKeys, middlewares...))
 	r.POST("/api/governance/virtual-keys", lib.ChainMiddlewares(h.createVirtualKey, middlewares...))
@@ -325,6 +331,78 @@ func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 	// Self-service endpoint — no admin auth, VK in header is the credential.
 	// Registered without admin middlewares; only common middlewares (telemetry) are applied.
 	r.GET("/api/governance/virtual-keys/quota", h.getVirtualKeyQuota)
+}
+
+func (h *GovernanceHandler) getComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx) {
+	if h.configStore == nil {
+		SendError(ctx, fasthttp.StatusServiceUnavailable, "config store not available")
+		return
+	}
+
+	cfg, err := configstore.GetComplexityAnalyzerConfig(ctx, h.configStore)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to get complexity analyzer config: %v", err))
+		return
+	}
+	if cfg == nil {
+		defaults := complexity.DefaultAnalyzerConfig()
+		SendJSON(ctx, defaults)
+		return
+	}
+
+	SendJSON(ctx, cfg)
+}
+
+func (h *GovernanceHandler) updateComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx) {
+	if h.configStore == nil {
+		SendError(ctx, fasthttp.StatusServiceUnavailable, "config store not available")
+		return
+	}
+
+	var payload configstore.ComplexityAnalyzerConfig
+	decoder := json.NewDecoder(bytes.NewReader(ctx.PostBody()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, fmt.Sprintf("invalid request format: %v", err))
+		return
+	}
+
+	normalized := payload.Normalized()
+	if err := normalized.Validate(); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, err.Error())
+		return
+	}
+
+	previous, err := configstore.GetComplexityAnalyzerConfig(ctx, h.configStore)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to read existing complexity analyzer config: %v", err))
+		return
+	}
+
+	if err := configstore.UpdateComplexityAnalyzerConfig(ctx, h.configStore, &normalized); err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to update complexity analyzer config: %v", err))
+		return
+	}
+
+	if err := h.governanceManager.ReloadComplexityAnalyzerConfig(ctx, &normalized); err != nil {
+		if rollbackErr := rollbackComplexityAnalyzerConfig(ctx, h.configStore, previous); rollbackErr != nil {
+			logger.Error("failed to rollback complexity analyzer config after reload failure: %v", rollbackErr)
+		}
+		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to reload complexity analyzer config: %v", err))
+		return
+	}
+
+	SendJSON(ctx, normalized)
+}
+
+func rollbackComplexityAnalyzerConfig(ctx context.Context, store configstore.ConfigStore, previous *configstore.ComplexityAnalyzerConfig) error {
+	if previous == nil {
+		return store.UpdateConfig(ctx, &configstoreTables.TableGovernanceConfig{
+			Key:   configstoreTables.ConfigComplexityAnalyzerConfigKey,
+			Value: "",
+		})
+	}
+	return configstore.UpdateComplexityAnalyzerConfig(ctx, store, previous)
 }
 
 // Virtual Key CRUD Operations

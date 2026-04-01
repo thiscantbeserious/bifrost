@@ -87,6 +87,7 @@ type ServerCallbacks interface {
 	RemoveProvider(ctx context.Context, provider schemas.ModelProvider) error
 	ReloadRoutingRule(ctx context.Context, id string) error
 	RemoveRoutingRule(ctx context.Context, id string) error
+	ReloadComplexityAnalyzerConfig(ctx context.Context, config *configstore.ComplexityAnalyzerConfig) error
 	// MCP related callbacks
 	AddMCPClient(ctx context.Context, clientConfig *schemas.MCPClientConfig) error
 	RemoveMCPClient(ctx context.Context, id string) error
@@ -681,6 +682,24 @@ func (s *BifrostHTTPServer) RemoveRoutingRule(ctx context.Context, id string) er
 	if err := store.DeleteRoutingRuleInMemory(id); err != nil {
 		return fmt.Errorf("failed to delete routing rule from store: %w", err)
 	}
+	return nil
+}
+
+// ReloadComplexityAnalyzerConfig swaps the governance plugin's complexity analyzer
+// with the provided full analyzer config.
+func (s *BifrostHTTPServer) ReloadComplexityAnalyzerConfig(ctx context.Context, config *configstore.ComplexityAnalyzerConfig) error {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return err
+	}
+
+	if config == nil {
+		governancePlugin.ReloadComplexityAnalyzerConfig(nil)
+		return nil
+	}
+
+	normalized := config.Normalized()
+	governancePlugin.ReloadComplexityAnalyzerConfig(&normalized)
 	return nil
 }
 

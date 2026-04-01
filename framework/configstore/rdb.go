@@ -3485,17 +3485,25 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 			}
 		}
 	}
+	complexityAnalyzerConfig, err := GetComplexityAnalyzerConfig(ctx, s)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("failed to load complexity analyzer config from governance_config: %v", err)
+		}
+		complexityAnalyzerConfig = nil
+	}
 	return &GovernanceConfig{
-		VirtualKeys:      virtualKeys,
-		Teams:            teams,
-		Customers:        customers,
-		Budgets:          budgets,
-		RateLimits:       rateLimits,
-		ModelConfigs:     modelConfigs,
-		Providers:        providers,
-		RoutingRules:     routingRules,
-		PricingOverrides: pricingOverrides,
-		AuthConfig:       authConfig,
+		VirtualKeys:              virtualKeys,
+		Teams:                    teams,
+		Customers:                customers,
+		Budgets:                  budgets,
+		RateLimits:               rateLimits,
+		ModelConfigs:             modelConfigs,
+		Providers:                providers,
+		RoutingRules:             routingRules,
+		PricingOverrides:         pricingOverrides,
+		AuthConfig:               authConfig,
+		ComplexityAnalyzerConfig: complexityAnalyzerConfig,
 	}, nil
 }
 

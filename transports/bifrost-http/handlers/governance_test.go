@@ -3,13 +3,17 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/plugins/governance"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
+	"gorm.io/gorm"
 )
 
 // mockGovernanceManagerForVK embeds the interface so unimplemented methods panic.
@@ -19,6 +23,10 @@ type mockGovernanceManagerForVK struct {
 }
 
 func (m *mockGovernanceManagerForVK) GetGovernanceData() *governance.GovernanceData {
+	return nil
+}
+
+func (m *mockGovernanceManagerForVK) ReloadComplexityAnalyzerConfig(ctx context.Context, config *configstore.ComplexityAnalyzerConfig) error {
 	return nil
 }
 
@@ -34,6 +42,57 @@ func (m *mockConfigStoreForVK) GetVirtualKeysPaginated(_ context.Context, _ conf
 
 func (m *mockConfigStoreForVK) GetVirtualKeys(_ context.Context) ([]configstoreTables.TableVirtualKey, error) {
 	return nil, nil
+}
+
+type mockGovernanceManagerForBoundaries struct {
+	GovernanceManager
+	reloadAnalyzerCalls int
+	reloadErr           error
+}
+
+func (m *mockGovernanceManagerForBoundaries) ReloadComplexityAnalyzerConfig(ctx context.Context, config *configstore.ComplexityAnalyzerConfig) error {
+	m.reloadAnalyzerCalls++
+	return m.reloadErr
+}
+
+func (m *mockGovernanceManagerForBoundaries) GetGovernanceData() *governance.GovernanceData {
+	return nil
+}
+
+type mockConfigStoreForBoundaries struct {
+	configstore.ConfigStore
+	analyzerConfig *configstore.ComplexityAnalyzerConfig
+}
+
+func (m *mockConfigStoreForBoundaries) GetConfig(_ context.Context, key string) (*configstoreTables.TableGovernanceConfig, error) {
+	if key != configstoreTables.ConfigComplexityAnalyzerConfigKey {
+		return nil, configstore.ErrNotFound
+	}
+	if m.analyzerConfig == nil {
+		return nil, configstore.ErrNotFound
+	}
+	raw, err := json.Marshal(m.analyzerConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &configstoreTables.TableGovernanceConfig{Key: key, Value: string(raw)}, nil
+}
+
+func (m *mockConfigStoreForBoundaries) UpdateConfig(_ context.Context, cfg *configstoreTables.TableGovernanceConfig, _ ...*gorm.DB) error {
+	if cfg.Key != configstoreTables.ConfigComplexityAnalyzerConfigKey {
+		return nil
+	}
+	if cfg.Value == "" {
+		m.analyzerConfig = nil
+		return nil
+	}
+	var parsed configstore.ComplexityAnalyzerConfig
+	if err := json.Unmarshal([]byte(cfg.Value), &parsed); err != nil {
+		return err
+	}
+	copy := parsed
+	m.analyzerConfig = &copy
+	return nil
 }
 
 // TestGetVirtualKeys_PaginatedEndpoint_ResponseShape verifies the JSON response
@@ -164,6 +223,183 @@ func TestGetVirtualKeys_PaginatedEndpoint_QueryParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetComplexityAnalyzerConfig_DefaultsWhenMissing(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	h := &GovernanceHandler{
+		configStore:       &mockConfigStoreForBoundaries{},
+		governanceManager: &mockGovernanceManagerForBoundaries{},
+	}
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("GET")
+	ctx.Request.SetRequestURI("/api/governance/complexity-analyzer-config")
+
+	h.getComplexityAnalyzerConfig(ctx)
+
+	require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
+
+	var resp configstore.ComplexityAnalyzerConfig
+	require.NoError(t, json.Unmarshal(ctx.Response.Body(), &resp))
+	require.Equal(t, complexity.DefaultTierBoundaries(), resp.TierBoundaries)
+	require.NotEmpty(t, resp.Keywords.CodeKeywords)
+}
+
+func TestUpdateComplexityAnalyzerConfig_PersistsAndReloads(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	store := &mockConfigStoreForBoundaries{}
+	manager := &mockGovernanceManagerForBoundaries{}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	payload := `{
+		"tier_boundaries":{"simple_medium":0.22,"medium_complex":0.44,"complex_reasoning":0.77},
+		"keywords":{
+			"code_keywords":["function","endpoint","router"],
+			"reasoning_keywords":["step by step"],
+			"technical_keywords":["kubernetes","latency"],
+			"simple_keywords":["what is"]
+		}
+	}`
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-analyzer-config")
+	ctx.Request.SetBodyString(payload)
+
+	h.updateComplexityAnalyzerConfig(ctx)
+
+	require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	require.NotNil(t, store.analyzerConfig)
+	require.Equal(t, 0.22, store.analyzerConfig.TierBoundaries.SimpleMedium)
+	require.Equal(t, []string{"function", "endpoint", "router"}, store.analyzerConfig.Keywords.CodeKeywords)
+	require.Equal(t, []string{"step by step"}, store.analyzerConfig.Keywords.ReasoningKeywords)
+	require.Equal(t, 1, manager.reloadAnalyzerCalls)
+}
+
+func TestUpdateComplexityAnalyzerConfig_RejectsUnknownKeywordFields(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	store := &mockConfigStoreForBoundaries{}
+	manager := &mockGovernanceManagerForBoundaries{}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	// strong_reasoning_keywords is a legacy internal field — API now only accepts
+	// the 4 editable dimensions. Strict decoder must reject unknown fields.
+	payload := `{
+		"tier_boundaries":{"simple_medium":0.22,"medium_complex":0.44,"complex_reasoning":0.77},
+		"keywords":{
+			"code_keywords":["function"],
+			"reasoning_keywords":["step by step"],
+			"technical_keywords":["kubernetes"],
+			"simple_keywords":["what is"],
+			"strong_reasoning_keywords":["rogue"]
+		}
+	}`
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-analyzer-config")
+	ctx.Request.SetBodyString(payload)
+
+	h.updateComplexityAnalyzerConfig(ctx)
+
+	require.Equal(t, fasthttp.StatusBadRequest, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	require.Nil(t, store.analyzerConfig)
+	require.Equal(t, 0, manager.reloadAnalyzerCalls)
+}
+
+func TestUpdateComplexityAnalyzerConfig_RejectsEmptyKeywordList(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	store := &mockConfigStoreForBoundaries{}
+	manager := &mockGovernanceManagerForBoundaries{}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	// Missing simple_keywords — partial payload must be rejected so it can't
+	// silently wipe the live keyword list (P1 fix).
+	payload := `{
+		"tier_boundaries":{"simple_medium":0.22,"medium_complex":0.44,"complex_reasoning":0.77},
+		"keywords":{
+			"code_keywords":["function"],
+			"reasoning_keywords":["step by step"],
+			"technical_keywords":["kubernetes"]
+		}
+	}`
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-analyzer-config")
+	ctx.Request.SetBodyString(payload)
+
+	h.updateComplexityAnalyzerConfig(ctx)
+
+	require.Equal(t, fasthttp.StatusBadRequest, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	require.Contains(t, string(ctx.Response.Body()), "simple_keywords")
+	require.Nil(t, store.analyzerConfig)
+	require.Equal(t, 0, manager.reloadAnalyzerCalls)
+}
+
+func TestUpdateComplexityAnalyzerConfig_RollsBackStoreWhenReloadFails(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	previous := configstore.ComplexityAnalyzerConfig{
+		TierBoundaries: complexity.TierBoundaries{
+			SimpleMedium:     0.15,
+			MediumComplex:    0.35,
+			ComplexReasoning: 0.65,
+		},
+		Keywords: complexity.EditableKeywordConfig{
+			CodeKeywords:      []string{"function", "api"},
+			ReasoningKeywords: []string{"analyze"},
+			TechnicalKeywords: []string{"latency"},
+			SimpleKeywords:    []string{"what is"},
+		},
+	}
+	store := &mockConfigStoreForBoundaries{analyzerConfig: &previous}
+	manager := &mockGovernanceManagerForBoundaries{reloadErr: errors.New("boom")}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	payload := `{
+		"tier_boundaries":{"simple_medium":0.22,"medium_complex":0.44,"complex_reasoning":0.77},
+		"keywords":{
+			"code_keywords":["function","endpoint","router"],
+			"reasoning_keywords":["step by step"],
+			"technical_keywords":["kubernetes","latency"],
+			"simple_keywords":["what is"]
+		}
+	}`
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-analyzer-config")
+	ctx.Request.SetBodyString(payload)
+
+	h.updateComplexityAnalyzerConfig(ctx)
+
+	require.Equal(t, fasthttp.StatusInternalServerError, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	require.Contains(t, string(ctx.Response.Body()), "failed to reload complexity analyzer config")
+	require.Equal(t, 1, manager.reloadAnalyzerCalls)
+	require.NotNil(t, store.analyzerConfig)
+	require.Equal(t, previous.TierBoundaries, store.analyzerConfig.TierBoundaries)
+	require.Equal(t, previous.Keywords.CodeKeywords, store.analyzerConfig.Keywords.CodeKeywords)
+	require.Equal(t, previous.Keywords.ReasoningKeywords, store.analyzerConfig.Keywords.ReasoningKeywords)
+	require.Equal(t, previous.Keywords.TechnicalKeywords, store.analyzerConfig.Keywords.TechnicalKeywords)
+	require.Equal(t, previous.Keywords.SimpleKeywords, store.analyzerConfig.Keywords.SimpleKeywords)
 }
 
 // Ensure mockLogger satisfies schemas.Logger (already defined in middlewares_test.go

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/stretchr/testify/assert"
@@ -27,12 +28,15 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		&tables.TableKey{},
 		&tables.TableBudget{},
 		&tables.TableRateLimit{},
+		&tables.TableModelConfig{},
 		&tables.TableVirtualKey{},
 		&tables.TableVirtualKeyProviderConfig{},
 		&tables.TableVirtualKeyProviderConfigKey{},
 		&tables.TableCustomer{},
 		&tables.TableTeam{},
+		&tables.TableRoutingRule{},
 		&tables.TableClientConfig{},
+		&tables.TableGovernanceConfig{},
 		&tables.TablePlugin{},
 		&tables.TableMCPClient{},
 		&tables.TableVirtualKeyMCPConfig{},
@@ -46,6 +50,7 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		&tables.TablePerUserOAuthSession{},
 		&tables.TableOauthUserSession{},
 		&tables.TableOauthUserToken{},
+		&tables.TablePricingOverride{},
 	)
 	require.NoError(t, err, "Failed to migrate test database")
 
@@ -57,6 +62,43 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		db:     db,
 		logger: nil,
 	}
+}
+
+func TestComplexityAnalyzerConfigRoundTrip(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	original := complexity.DefaultAnalyzerConfig()
+	original.TierBoundaries.SimpleMedium = 0.18
+	original.Keywords.CodeKeywords = []string{"function", "router", "endpoint"}
+
+	err := UpdateComplexityAnalyzerConfig(ctx, store, &original)
+	require.NoError(t, err)
+
+	loaded, err := GetComplexityAnalyzerConfig(ctx, store)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, 0.18, loaded.TierBoundaries.SimpleMedium)
+	assert.Equal(t, []string{"function", "router", "endpoint"}, loaded.Keywords.CodeKeywords)
+}
+
+func TestGetGovernanceConfig_IncludesComplexityAnalyzerConfig(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	cfg := complexity.DefaultAnalyzerConfig()
+	cfg.TierBoundaries.ComplexReasoning = 0.72
+	cfg.Keywords.TechnicalKeywords = []string{"kubernetes", "latency"}
+
+	err := UpdateComplexityAnalyzerConfig(ctx, store, &cfg)
+	require.NoError(t, err)
+
+	governanceConfig, err := store.GetGovernanceConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, governanceConfig)
+	require.NotNil(t, governanceConfig.ComplexityAnalyzerConfig)
+	assert.Equal(t, 0.72, governanceConfig.ComplexityAnalyzerConfig.TierBoundaries.ComplexReasoning)
+	assert.Equal(t, []string{"kubernetes", "latency"}, governanceConfig.ComplexityAnalyzerConfig.Keywords.TechnicalKeywords)
 }
 
 // =============================================================================

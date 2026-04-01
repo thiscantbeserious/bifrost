@@ -366,6 +366,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework"
 	"github.com/maximhq/bifrost/framework/configstore"
@@ -12522,6 +12523,119 @@ func TestGenerateClientConfigHash(t *testing.T) {
 // ===================================================================================
 // COMBINED GOVERNANCE RECONCILIATION TEST
 // ===================================================================================
+
+func TestSQLite_ComplexityAnalyzerConfig_FileSeeded(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	analyzerConfig := complexity.DefaultAnalyzerConfig()
+	analyzerConfig.TierBoundaries.SimpleMedium = 0.18
+	analyzerConfig.TierBoundaries.MediumComplex = 0.42
+	analyzerConfig.TierBoundaries.ComplexReasoning = 0.73
+	analyzerConfig.Keywords.TechnicalKeywords = []string{"Kubernetes", "latency", "latency"}
+
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	configData.Governance = &configstore.GovernanceConfig{
+		ComplexityAnalyzerConfig: &analyzerConfig,
+	}
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config.Close(ctx)
+
+	require.NotNil(t, config.GovernanceConfig)
+	require.NotNil(t, config.GovernanceConfig.ComplexityAnalyzerConfig)
+	require.Equal(t, 0.18, config.GovernanceConfig.ComplexityAnalyzerConfig.TierBoundaries.SimpleMedium)
+	require.Equal(t, []string{"kubernetes", "latency"}, config.GovernanceConfig.ComplexityAnalyzerConfig.Keywords.TechnicalKeywords)
+
+	stored, err := configstore.GetComplexityAnalyzerConfig(ctx, config.ConfigStore)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Equal(t, 0.73, stored.TierBoundaries.ComplexReasoning)
+	require.Equal(t, []string{"kubernetes", "latency"}, stored.Keywords.TechnicalKeywords)
+}
+
+func TestSQLite_ComplexityAnalyzerConfig_UpdatePersists(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	// No analyzer config in the file — API-only update path
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config1, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+
+	cfg := complexity.DefaultAnalyzerConfig()
+	cfg.TierBoundaries.SimpleMedium = 0.20
+	cfg.TierBoundaries.MediumComplex = 0.40
+	cfg.TierBoundaries.ComplexReasoning = 0.70
+	require.NoError(t, configstore.UpdateComplexityAnalyzerConfig(ctx, config1.ConfigStore, &cfg))
+	config1.Close(ctx)
+
+	config2, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config2.Close(ctx)
+
+	stored, err := configstore.GetComplexityAnalyzerConfig(ctx, config2.ConfigStore)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Equal(t, 0.20, stored.TierBoundaries.SimpleMedium)
+	require.Equal(t, 0.40, stored.TierBoundaries.MediumComplex)
+	require.Equal(t, 0.70, stored.TierBoundaries.ComplexReasoning)
+}
+
+func TestSQLite_ComplexityAnalyzerConfig_FileWinsOnRestartWhenPresent(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	// Step 1: Boot with analyzer config from file — seeds DB
+	seedCfg := complexity.DefaultAnalyzerConfig()
+	seedCfg.TierBoundaries.SimpleMedium = 0.15
+	seedCfg.TierBoundaries.MediumComplex = 0.35
+	seedCfg.TierBoundaries.ComplexReasoning = 0.60
+
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	configData.Governance = &configstore.GovernanceConfig{
+		ComplexityAnalyzerConfig: &seedCfg,
+	}
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config1, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+
+	stored, err := configstore.GetComplexityAnalyzerConfig(ctx, config1.ConfigStore)
+	require.NoError(t, err)
+	require.NotNil(t, stored, "DB should be seeded from file")
+	require.Equal(t, 0.15, stored.TierBoundaries.SimpleMedium)
+
+	// Step 2: Edit via API (simulates PUT endpoint)
+	edited := complexity.DefaultAnalyzerConfig()
+	edited.TierBoundaries.SimpleMedium = 0.20
+	edited.TierBoundaries.MediumComplex = 0.45
+	edited.TierBoundaries.ComplexReasoning = 0.75
+	require.NoError(t, configstore.UpdateComplexityAnalyzerConfig(ctx, config1.ConfigStore, &edited))
+	config1.Close(ctx)
+
+	// Step 3: Restart with same file still present — file should win
+	config2, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config2.Close(ctx)
+
+	require.NotNil(t, config2.GovernanceConfig)
+	require.NotNil(t, config2.GovernanceConfig.ComplexityAnalyzerConfig)
+	require.Equal(t, 0.15, config2.GovernanceConfig.ComplexityAnalyzerConfig.TierBoundaries.SimpleMedium, "file config should be reapplied on restart")
+	require.Equal(t, 0.35, config2.GovernanceConfig.ComplexityAnalyzerConfig.TierBoundaries.MediumComplex)
+	require.Equal(t, 0.60, config2.GovernanceConfig.ComplexityAnalyzerConfig.TierBoundaries.ComplexReasoning)
+
+	reloaded, err := configstore.GetComplexityAnalyzerConfig(ctx, config2.ConfigStore)
+	require.NoError(t, err)
+	require.Equal(t, 0.15, reloaded.TierBoundaries.SimpleMedium, "DB should be resynced from file when file config is present")
+}
 
 // TestSQLite_Governance_FullReconciliation tests full governance reconciliation
 func TestSQLite_Governance_FullReconciliation(t *testing.T) {

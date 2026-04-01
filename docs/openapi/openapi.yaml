@@ -713,6 +713,10 @@ paths:
   /api/governance/pricing-overrides/{id}:
     $ref: './paths/management/governance.yaml#/pricing-overrides-by-id'
 
+  # Governance - Complexity Analyzer Config
+  /api/governance/complexity-analyzer-config:
+    $ref: './paths/management/governance.yaml#/complexity-analyzer-config'
+
   # Logging
   /api/logs:
     $ref: './paths/management/logging.yaml#/logs'

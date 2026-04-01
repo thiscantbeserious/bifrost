@@ -8,6 +8,7 @@ import (
 	"time"
 
 	bifrost "github.com/maximhq/bifrost/core"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/kvstore"
 	"github.com/maximhq/bifrost/plugins/governance"
@@ -331,6 +332,9 @@ func (m *mockRealtimeMintingGovernancePlugin) Cleanup() error {
 
 func (m *mockRealtimeMintingGovernancePlugin) GetGovernanceStore() governance.GovernanceStore {
 	return nil
+}
+
+func (m *mockRealtimeMintingGovernancePlugin) ReloadComplexityAnalyzerConfig(_ *complexity.AnalyzerConfig) {
 }
 
 func TestRealtimeClientSecretsEvaluateMintingGovernance_RequiresAccess(t *testing.T) {
