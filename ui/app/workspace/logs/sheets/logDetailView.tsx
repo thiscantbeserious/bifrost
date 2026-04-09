@@ -33,8 +33,8 @@ import {
 } from "@/lib/constants/logs";
 import { LogEntry } from "@/lib/types/logs";
 import { Link } from "@tanstack/react-router";
-import { Clipboard, Loader2, MoreVertical, Trash2 } from "lucide-react";
 import { addMilliseconds, format } from "date-fns";
+import { Clipboard, Loader2, MoreVertical, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import BlockHeader from "../views/blockHeader";
@@ -77,6 +77,7 @@ const isContainerOperation = (object: string) => {
 
 interface LogDetailViewProps {
 	log: LogEntry | null;
+	resolvedSelectedPromptName?: string; // Current prompt name from prompt-repo when `selected_prompt_id` is set; falls back to stored log name
 	loading?: boolean;
 	handleDelete?: (log: LogEntry) => void;
 	onClose?: () => void;
@@ -86,6 +87,7 @@ interface LogDetailViewProps {
 
 export function LogDetailView({
 	log,
+	resolvedSelectedPromptName,
 	loading = false,
 	handleDelete,
 	onClose,
@@ -99,6 +101,8 @@ export function LogDetailView({
 	});
 
 	if (!log) return null;
+
+	const selectedPromptDisplayName = resolvedSelectedPromptName ?? log.selected_prompt_name ?? "";
 
 	const isContainer = isContainerOperation(log.object);
 	const isPassthrough = isPassthroughOperation(log.object);
@@ -279,6 +283,19 @@ export function LogDetailView({
 							/>
 						)}
 						{log.selected_key && <LogEntryDetailsView className="w-full" label="Selected Key" value={log.selected_key.name} />}
+						{(log.selected_prompt_id || log.selected_prompt_name || log.selected_prompt_version) && (
+							<LogEntryDetailsView
+								className="w-full"
+								label="Selected Prompt"
+								value={
+									<span className="break-words">
+										{selectedPromptDisplayName}
+										{selectedPromptDisplayName && log.selected_prompt_version ? " · " : ""}
+										{log.selected_prompt_version ? <>v{log.selected_prompt_version}</> : null}
+									</span>
+								}
+							/>
+						)}
 						{log.number_of_retries > 0 && (
 							<LogEntryDetailsView className="w-full" label="Number of Retries" value={log.number_of_retries} />
 						)}

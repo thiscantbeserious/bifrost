@@ -230,6 +230,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddHasObjectColumn(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddSelectedPromptColumns(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -2456,6 +2459,47 @@ func migrationAddOCROutputColumn(ctx context.Context, db *gorm.DB) error {
 	err := m.Migrate()
 	if err != nil {
 		return fmt.Errorf("error while adding ocr output column: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddSelectedPromptColumns adds selected_prompt_name and selected_prompt_version for logs UI.
+func migrationAddSelectedPromptColumns(ctx context.Context, db *gorm.DB) error {
+	opts := *migrator.DefaultOptions
+	opts.UseTransaction = true
+
+	columns := []string{"selected_prompt_name", "selected_prompt_version", "selected_prompt_id"}
+
+	m := migrator.New(db, &opts, []*migrator.Migration{{
+		ID: "logs_add_selected_prompt_columns",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mig := tx.Migrator()
+			for _, col := range columns {
+				if !mig.HasColumn(&Log{}, col) {
+					if err := mig.AddColumn(&Log{}, col); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mig := tx.Migrator()
+			for _, col := range columns {
+				if mig.HasColumn(&Log{}, col) {
+					if err := mig.DropColumn(&Log{}, col); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
+	}})
+	err := m.Migrate()
+	if err != nil {
+		return fmt.Errorf("error while adding selected prompt columns: %s", err.Error())
 	}
 	return nil
 }
