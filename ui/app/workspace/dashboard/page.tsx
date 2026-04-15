@@ -1,4 +1,4 @@
-import { LogsSidebar } from "@/app/workspace/logs/views/logsSidebar";
+import { LogsFilterSidebar } from "@/components/filters/logsFilterSidebar";
 import { DateTimePickerWithRange } from "@/components/ui/datePickerWithRange";
 import { ScrollArea } from "@/components/ui/scrollArea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -47,6 +47,33 @@ import { ProviderUsageTab } from "./components/providerUsageTab";
 
 // Type-safe parser for chart type URL state
 const toChartType = (value: string): ChartType => (value === "line" ? "line" : "bar");
+
+// Predefined time periods
+const TIME_PERIODS = [
+	{ label: "Last hour", value: "1h" },
+	{ label: "Last 6 hours", value: "6h" },
+	{ label: "Last 24 hours", value: "24h" },
+	{ label: "Last 7 days", value: "7d" },
+	{ label: "Last 30 days", value: "30d" },
+];
+
+function getTimeRangeFromPeriod(period: string): { start: number; end: number } {
+	const now = Math.floor(Date.now() / 1000);
+	switch (period) {
+		case "1h":
+			return { start: now - 3600, end: now };
+		case "6h":
+			return { start: now - 6 * 3600, end: now };
+		case "24h":
+			return { start: now - 24 * 3600, end: now };
+		case "7d":
+			return { start: now - 7 * 24 * 3600, end: now };
+		case "30d":
+			return { start: now - 30 * 24 * 3600, end: now };
+		default:
+			return { start: now - 24 * 3600, end: now };
+	}
+}
 
 // Calculate default timestamps once at module level
 const DEFAULT_END_TIME = Math.floor(Date.now() / 1000);
@@ -497,6 +524,36 @@ export default function DashboardPage() {
 		[setUrlState],
 	);
 
+	// Date range for picker
+	const dateRange = useMemo(
+		() => ({
+			from: dateUtils.fromUnixTimestamp(urlState.start_time),
+			to: dateUtils.fromUnixTimestamp(urlState.end_time),
+		}),
+		[urlState.start_time, urlState.end_time],
+	);
+
+	const handlePeriodChange = useCallback(
+		(period: string | undefined) => {
+			if (!period) return;
+			const { start, end } = getTimeRangeFromPeriod(period);
+			setUrlState({ start_time: start, end_time: end, period });
+		},
+		[setUrlState],
+	);
+
+	const handleDateRangeChange = useCallback(
+		(range: { from?: Date; to?: Date }) => {
+			if (!range.from || !range.to) return;
+			setUrlState({
+				start_time: dateUtils.toUnixTimestamp(range.from),
+				end_time: dateUtils.toUnixTimestamp(range.to),
+				period: "",
+			});
+		},
+		[setUrlState],
+	);
+
 	const handleProviderCostChartToggle = useCallback((type: ChartType) => setUrlState({ provider_cost_chart: type }), [setUrlState]);
 	const handleProviderTokenChartToggle = useCallback((type: ChartType) => setUrlState({ provider_token_chart: type }), [setUrlState]);
 	const handleProviderLatencyChartToggle = useCallback((type: ChartType) => setUrlState({ provider_latency_chart: type }), [setUrlState]);
@@ -638,7 +695,7 @@ export default function DashboardPage() {
 	return (
 		<div id="dashboard-root" className="no-padding-parent no-border-parent bg-background flex h-[calc(100vh_-_16px)] w-full gap-3">
 			{/* Sidebar Filters */}
-			<LogsSidebar filters={filters} onFiltersChange={setFilters} />
+			<LogsFilterSidebar filters={filters} onFiltersChange={setFilters} />
 
 			{/* Main Content */}
 			<ScrollArea className="bg-card flex min-w-0 flex-1 flex-col gap-4 rounded-l-md">
@@ -688,6 +745,15 @@ export default function DashboardPage() {
 								)}
 							</div>
 						)}
+						<DateTimePickerWithRange
+							dateTime={dateRange}
+							onDateTimeUpdate={handleDateRangeChange}
+							preDefinedPeriods={TIME_PERIODS}
+							predefinedPeriod={urlState.period || undefined}
+							onPredefinedPeriodChange={handlePeriodChange}
+							triggerTestId="dashboard-filter-daterange"
+							popupAlignment="end"
+						/>
 					</div>
 				</div>
 
