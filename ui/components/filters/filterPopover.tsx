@@ -216,6 +216,19 @@ export function FilterPopover({
 								</div>
 							</CommandGroup>
 						)}
+						<CommandGroup heading="User">
+							<div className="px-2 py-1.5">
+								<Input
+									value={filters.user_ids?.[0] || ""}
+									onChange={(e) => onFilterChange("user_ids", e.target.value ? [e.target.value] : [])}
+									onKeyDown={(e) => e.stopPropagation()}
+									onClick={(e) => e.stopPropagation()}
+									placeholder="User ID"
+									className="h-8"
+									data-testid="user-id-filter-input"
+								/>
+							</div>
+						</CommandGroup>
 						{showMissingCost && (
 							<CommandGroup>
 								<CommandItem className="cursor-pointer">
