@@ -120,6 +120,7 @@ type Log struct {
 	RoutingRuleID           *string   `gorm:"type:varchar(255);index:idx_logs_routing_rule_id" json:"routing_rule_id"`
 	RoutingRuleName         *string   `gorm:"type:varchar(255)" json:"routing_rule_name"`
 	UserID                  *string   `gorm:"type:varchar(255);index:idx_logs_user_id" json:"user_id"`
+	UserName                *string   `gorm:"type:varchar(255)" json:"user_name"`
 	TeamID                  *string   `gorm:"type:varchar(255);index:idx_logs_team_id" json:"team_id"`
 	TeamName                *string   `gorm:"type:varchar(255)" json:"team_name"`
 	CustomerID              *string   `gorm:"type:varchar(255);index:idx_logs_customer_id" json:"customer_id"`
