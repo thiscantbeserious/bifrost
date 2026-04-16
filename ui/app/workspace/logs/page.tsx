@@ -3,14 +3,13 @@ import { SessionDetailsSheet } from "@/app/workspace/logs/sheets/sessionDetailsS
 import { createColumns } from "@/app/workspace/logs/views/columns";
 import { EmptyState } from "@/app/workspace/logs/views/emptyState";
 import { LogsHeaderView } from "@/app/workspace/logs/views/logsHeaderView";
-import { LogsFilterSidebar } from "@/components/filters/logsFilterSidebar";
 import { LogsDataTable } from "@/app/workspace/logs/views/logsTable";
 import { LogsVolumeChart } from "@/app/workspace/logs/views/logsVolumeChart";
-import { useColumnConfig } from "@/components/table";
+import { LogsFilterSidebar } from "@/components/filters/logsFilterSidebar";
 import FullPageLoader from "@/components/fullPageLoader";
+import { useColumnConfig } from "@/components/table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import {
 	getErrorMessage,
@@ -31,7 +30,9 @@ import type {
 	Pagination,
 } from "@/lib/types/logs";
 import { dateUtils } from "@/lib/types/logs";
+import { COMPACT_NUMBER_FORMAT } from "@/lib/utils/numbers";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
+import NumberFlow from "@number-flow/react";
 import { AlertCircle, BarChart, CheckCircle, Clock, DollarSign, Hash } from "lucide-react";
 import { parseAsArrayOf, parseAsBoolean, parseAsInteger, parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -623,7 +624,6 @@ export default function LogsPage() {
 
 	const fetchStats = useCallback(async () => {
 		setFetchingStats(true);
-
 		try {
 			const result = await triggerGetStats({ filters });
 
@@ -815,31 +815,33 @@ export default function LogsPage() {
 		() => [
 			{
 				title: "Total Requests",
-				value: fetchingStats ? <Skeleton className="h-8 w-20" /> : stats?.total_requests.toLocaleString() || "-",
+				value: <NumberFlow value={stats?.total_requests ?? 0} format={COMPACT_NUMBER_FORMAT} />,
 				icon: <BarChart className="size-4" />,
 			},
 			{
 				title: "Success Rate",
-				value: fetchingStats ? <Skeleton className="h-8 w-16" /> : stats ? `${stats.success_rate.toFixed(2)}%` : "-",
+				value: <NumberFlow value={stats?.success_rate ?? 0} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} suffix="%" />,
 				icon: <CheckCircle className="size-4" />,
 			},
 			{
 				title: "Avg Latency",
-				value: fetchingStats ? <Skeleton className="h-8 w-20" /> : stats ? `${stats.average_latency.toFixed(2)}ms` : "-",
+				value: (
+					<NumberFlow value={stats?.average_latency ?? 0} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} suffix="ms" />
+				),
 				icon: <Clock className="size-4" />,
 			},
 			{
 				title: "Total Tokens",
-				value: fetchingStats ? <Skeleton className="h-8 w-24" /> : stats?.total_tokens.toLocaleString() || "-",
+				value: <NumberFlow value={stats?.total_tokens ?? 0} format={COMPACT_NUMBER_FORMAT} />,
 				icon: <Hash className="size-4" />,
 			},
 			{
 				title: "Total Cost",
-				value: fetchingStats ? <Skeleton className="h-8 w-20" /> : stats ? `$${(stats.total_cost ?? 0).toFixed(4)}` : "-",
+				value: <NumberFlow value={stats?.total_cost ?? 0} format={{ ...COMPACT_NUMBER_FORMAT, style: "currency", currency: "USD" }} />,
 				icon: <DollarSign className="size-4" />,
 			},
 		],
-		[stats, fetchingStats],
+		[stats],
 	);
 
 	const columns = useMemo(() => createColumns(handleDelete, hasDeleteAccess), [handleDelete, hasDeleteAccess]);
@@ -959,7 +961,9 @@ export default function LogsPage() {
 						<div className="grid shrink-0 grid-cols-1 gap-4 md:grid-cols-5">
 							{statCards.map((card) => (
 								<Card key={card.title} className="py-4 shadow-none">
-									<CardContent className="flex items-center justify-between px-4">
+									<CardContent
+										className={`flex items-center justify-between px-4 transition-opacity duration-200 ${fetchingStats ? "opacity-50" : "opacity-100"}`}
+									>
 										<div className="w-full min-w-0">
 											<div className="text-muted-foreground text-xs">{card.title}</div>
 											<div className="truncate font-mono text-xl font-medium sm:text-2xl">{card.value}</div>
